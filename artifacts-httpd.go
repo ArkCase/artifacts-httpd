@@ -12,11 +12,38 @@ import (
 	filepath "path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const FILE_SEP = string(os.PathSeparator)
 
 var ROOT_DIR string
+
+type FileInfo struct {
+	Name     string `json:"name"`
+	Size     int64  `json:"size"`
+	Path     string `json:"path"`
+	Version  string `json:"version"`
+	Checksum string `json:"checksum"`
+	Mtime    string `json:"mtime"`
+}
+
+type DirListEntry struct {
+	Name string `json:"name"`
+}
+
+type DirList struct {
+	Name        string         `json:"name"`
+	Files       []DirListEntry `json:"files"`
+	Directories []DirListEntry `json:"directories"`
+}
+
+type Response struct {
+	Rc          int    `json:"rc"`
+	Msg         string `json:"msg"`
+	Data        any    `json:"data"`
+	contentType string
+}
 
 func SanitizePath(Path string) string {
 	path := filepath.Clean(Path)
@@ -32,7 +59,6 @@ func GlobalSums() []byte {
 		log.Printf("Failed to fetch the global checksums: %v", err)
 		return nil
 	}
-
 	return out
 }
 
@@ -42,51 +68,7 @@ type DirectoryEntry struct {
 	Size  int64
 }
 
-func NewDirectoryEntry(Item os.DirEntry) *DirectoryEntry {
-	e := new(DirectoryEntry)
-	e.IsDir = Item.IsDir()
-	if e.IsDir {
-		e.Name = Item.Name() + FILE_SEP
-		e.Size = 0
-	} else {
-		e.Name = Item.Name()
-		info, err := Item.Info()
-		if err != nil {
-			return nil
-		}
-		e.Size = info.Size()
-	}
-	return e
-}
-
-func ListDirContents(Path string) []byte {
-	// Iterate through all contents of the directory
-	entries, err := os.ReadDir(Path)
-	if err != nil {
-		log.Printf("Failed to list the contents for the directory [%s]: %v", Path, err)
-		return nil
-	}
-
-	m := make(map[string]*DirectoryEntry)
-	for _, e := range entries {
-		entry := NewDirectoryEntry(e)
-		if entry == nil {
-			log.Printf("Failed to analyze the directory entry [%s] at [%s]: %v", e.Name(), Path, err)
-			return nil
-		}
-		m[entry.Name] = entry
-	}
-
-	json, err := json.Marshal(m)
-	if err != nil {
-		log.Printf("Failed to encode the directory contents as JSON: %v", err)
-		return nil
-	}
-
-	return []byte(json)
-}
-
-func WriteFile(Path string, Stat os.FileInfo) []byte {
+func ReadFile(Path string) []byte {
 	// Output the file and its size
 	fileBytes, err := os.ReadFile(Path)
 	if err != nil {
@@ -96,77 +78,193 @@ func WriteFile(Path string, Stat os.FileInfo) []byte {
 	return fileBytes
 }
 
+func FileExists(Path string) bool {
+	// Output the file and its size
+	_, err := os.Stat(Path)
+	return (err == nil)
+}
+
+func ListDirContents(Path string) *DirList {
+
+	// Iterate through all contents of the directory
+	entries, err := os.ReadDir(Path)
+	if err != nil {
+		log.Printf("Failed to list the contents for the directory [%s]: %v", Path, err)
+		return nil
+	}
+
+	list := new(DirList)
+	list.Name = filepath.Base(Path)
+	list.Directories = []DirListEntry{}
+	list.Files = []DirListEntry{}
+
+	for _, e := range entries {
+		entry := new(DirListEntry)
+		entry.Name = e.Name()
+		if e.IsDir() {
+			list.Directories = append(list.Directories, *entry)
+		} else {
+			list.Files = append(list.Files, *entry)
+		}
+	}
+	return list
+}
+
+func GetFileInfo(Path string) *FileInfo {
+	stat, err := os.Stat(Path)
+	if err != nil {
+		log.Printf("Failed to Stat the file at [%s]: %s", Path, err.Error())
+		return nil
+	}
+
+	info := new(FileInfo)
+	info.Name = stat.Name()
+	info.Size = stat.Size()
+	info.Path = Path
+	info.Mtime = stat.ModTime().UTC().Format(time.RFC3339)
+
+	info.Version = ""
+	f := Path + ".ver"
+	if FileExists(f) {
+		data := ReadFile(f)
+		if data != nil {
+			info.Version = string(data)
+		}
+	}
+
+	info.Checksum = ""
+	f = Path + ".sum"
+	if FileExists(f) {
+		data := ReadFile(f)
+		if data != nil {
+			info.Checksum = string(data)
+		}
+	}
+
+	return info
+}
+
 func TranslatePath(Path string) string {
 	// Translate the given path into the actual, on-disk path
 	return ROOT_DIR + FILE_SEP + Path
 }
 
-func HandleRequest(rsp http.ResponseWriter, req *http.Request) {
+func HandlePath(Path string, rsp http.ResponseWriter, req *http.Request) *Response {
+
+	response := new(Response)
 
 	// Only GET is allowed
 	switch req.Method {
 	case http.MethodGet:
 		break
 	default:
-		log.Printf("Unsupported %s request received for [%s]", req.Method, req.RequestURI)
-		rsp.WriteHeader(http.StatusMethodNotAllowed)
-		return
+		response.Msg = fmt.Sprintf("Unsupported %s request received for [%s]", req.Method, req.RequestURI)
+		response.Rc = http.StatusMethodNotAllowed
+		return response
 	}
 
+	cmd := req.URL.Query().Get("cmd")
+	switch cmd {
+	case "list":
+	case "info":
+	case "download":
+		break
+	case "":
+		cmd = "download"
+
+	default:
+		response.Msg = fmt.Sprintf("Unsupported command [%s] received for [%s]", cmd, req.RequestURI)
+		response.Rc = http.StatusBadRequest
+		return response
+	}
+
+	// Translate to the actual path
+	Path = TranslatePath(Path)
+
+	info, err := os.Stat(Path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			response.Rc = http.StatusNotFound
+			response.Msg = fmt.Sprintf("Path not found [%s] -> [%s]", req.RequestURI, Path)
+		} else if os.IsPermission(err) {
+			response.Rc = http.StatusForbidden
+			response.Msg = fmt.Sprintf("Access denied [%s] -> [%s]", req.RequestURI, Path)
+		} else {
+			response.Rc = http.StatusInternalServerError
+			response.Msg = fmt.Sprintf("Internal server error while processing the %s request for [%s] (%s): %s", cmd, req.RequestURI, Path, err.Error())
+		}
+		return response
+	}
+
+	if info.IsDir() {
+		response.Data = ListDirContents(Path)
+		response.contentType = "application/json"
+	} else if cmd == "download" {
+		response.Data = ReadFile(Path)
+		response.contentType = "application/octet-stream"
+	} else {
+		response.Data = GetFileInfo(Path)
+		response.contentType = "application/json"
+	}
+
+	if response.Data == nil {
+		response.Rc = http.StatusInternalServerError
+		response.Msg = "Internal Server Error"
+	} else {
+		response.Rc = http.StatusOK
+		response.Msg = "OK"
+	}
+
+	return response
+}
+
+func HandleRequest(rsp http.ResponseWriter, req *http.Request) {
+
 	// Sanitize and clean up the relative path
-	path := SanitizePath(req.RequestURI)
+	path := strings.TrimPrefix(req.URL.Path, "/api/1")
+
+	path = SanitizePath(path)
 	path = strings.TrimPrefix(path, FILE_SEP)
 	path = strings.TrimSuffix(path, FILE_SEP)
 
+	// We don't care if the command is list or download - always produce the output
+	var data []byte
+	var err error
+	response := new(Response)
 	if path == "global-sums" {
-		data := GlobalSums()
+		data = GlobalSums()
 		if data == nil {
 			rsp.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		// Spit out the output
-		rsp.Write(data)
-		rsp.Header().Set("Content-Type", "application/json")
-		rsp.WriteHeader(http.StatusOK)
-		return
-	}
 
-	// Translate to the actual path
-	path = TranslatePath(path)
-
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			log.Printf("Requested a missing path: [%s] (%s)", req.RequestURI, path)
-			rsp.WriteHeader(http.StatusNotFound)
-		} else if os.IsPermission(err) {
-			log.Printf("Requested a forbidden path: [%s] (%s)", req.RequestURI, path)
-			rsp.WriteHeader(http.StatusForbidden)
-		} else {
-			log.Printf("Errors detected while processing the path [%s](%s): %s", req.RequestURI, path, err.Error())
-			rsp.WriteHeader(http.StatusInternalServerError)
-		}
-		return
-	}
-
-	contentType := ""
-	data := []byte("")
-
-	if info.IsDir() {
-		data = ListDirContents(path)
-		contentType = "application/json"
+		response.Rc = http.StatusOK
+		response.contentType = "application/json"
 	} else {
-		data = WriteFile(path, info)
-		contentType = "application/octet-stream"
+		response = HandlePath(path, rsp, req)
+		if response == nil {
+			log.Printf("Failed to obtain a response object")
+			rsp.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		if response.Rc != http.StatusOK {
+			log.Printf(response.Msg)
+			rsp.WriteHeader(response.Rc)
+			return
+		}
+
+		data, err = json.Marshal(response)
+		if err != nil {
+			log.Printf("Failed to marshal the JSON for the response: %s", err.Error())
+			rsp.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 	}
 
-	if data == nil {
-		rsp.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
+	rsp.Header().Set("Content-Type", response.contentType)
+	rsp.WriteHeader(response.Rc)
 	rsp.Write(data)
-	rsp.Header().Set("Content-Type", contentType)
 }
 
 func ConfigureAddress(TLS bool) string {
