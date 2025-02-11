@@ -103,6 +103,18 @@ func ListDirContents(Path string) *DirList {
 		entry.Name = e.Name()
 		if e.IsDir() {
 			list.Directories = append(list.Directories, *entry)
+		} else if strings.HasSuffix(entry.Name, ".sum") {
+			// If this is associated to a parent file, ignore it
+			parent := Path + FILE_SEP + strings.TrimSuffix(entry.Name, ".sum")
+			if _, err := os.Stat(parent); os.IsNotExist(err) {
+				list.Files = append(list.Files, *entry)
+			}
+		} else if strings.HasSuffix(entry.Name, ".ver") {
+			// If this is associated to a parent file, ignore it
+			parent := Path + FILE_SEP + strings.TrimSuffix(entry.Name, ".ver")
+			if _, err := os.Stat(parent); os.IsNotExist(err) {
+				list.Files = append(list.Files, *entry)
+			}
 		} else {
 			list.Files = append(list.Files, *entry)
 		}
