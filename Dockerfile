@@ -1,8 +1,8 @@
 ARG BUILDER_IMAGE="golang"
-ARG BUILDER_VER="1.23-alpine3.21"
+ARG BUILDER_VER="1.24-alpine3.22"
 ARG ARCH="amd64"
 ARG OS="linux"
-ARG VER="1.0.0"
+ARG VER="1.1.0"
 
 FROM "${BUILDER_IMAGE}:${BUILDER_VER}" AS builder
 

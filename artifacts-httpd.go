@@ -43,6 +43,7 @@ type Response struct {
 	Msg         string `json:"msg"`
 	Data        any    `json:"data"`
 	contentType string
+	fileData    []byte
 }
 
 func SanitizePath(Path string) string {
@@ -212,16 +213,16 @@ func HandlePath(Path string, rsp http.ResponseWriter, req *http.Request) *Respon
 		response.Data = ListDirContents(Path)
 		response.contentType = "application/json"
 	} else if cmd == "download" {
-		response.Data = ReadFile(Path)
+		response.fileData = ReadFile(Path)
 		response.contentType = "application/octet-stream"
 	} else {
 		response.Data = GetFileInfo(Path)
 		response.contentType = "application/json"
 	}
 
-	if response.Data == nil {
+	if (response.Data == nil) && (response.fileData == nil) {
 		response.Rc = http.StatusInternalServerError
-		response.Msg = "Internal Server Error"
+		response.Msg = fmt.Sprintf("Internal Server Error (no data to be returned for [%s])", Path)
 	} else {
 		response.Rc = http.StatusOK
 		response.Msg = "OK"
@@ -266,11 +267,15 @@ func HandleRequest(rsp http.ResponseWriter, req *http.Request) {
 			return
 		}
 
-		data, err = json.Marshal(response)
-		if err != nil {
-			log.Printf("Failed to marshal the JSON for the response: %s", err.Error())
-			rsp.WriteHeader(http.StatusInternalServerError)
-			return
+		if response.fileData != nil {
+			data = response.fileData
+		} else {
+			data, err = json.Marshal(response)
+			if err != nil {
+				log.Printf("Failed to marshal the JSON for the response: %s", err.Error())
+				rsp.WriteHeader(http.StatusInternalServerError)
+				return
+			}
 		}
 	}
 
