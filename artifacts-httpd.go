@@ -85,19 +85,23 @@ func FileExists(Path string) bool {
 	return (err == nil)
 }
 
-func ListDirContents(Path string) *DirList {
-
-	// Iterate through all contents of the directory
-	entries, err := os.ReadDir(Path)
-	if err != nil {
-		log.Printf("Failed to list the contents for the directory [%s]: %v", Path, err)
-		return nil
-	}
+func ListDirContents(Path string, KnownMissing bool) *DirList {
 
 	list := new(DirList)
 	list.Name = filepath.Base(Path)
 	list.Directories = []DirListEntry{}
 	list.Files = []DirListEntry{}
+
+	if KnownMissing {
+		return list
+	}
+
+	// Iterate through all contents of the directory
+	entries, err := os.ReadDir(Path)
+	if err != nil {
+		log.Printf("Failed to list the contents for the directory [%s]: %v", Path, err)
+		return list
+	}
 
 	for _, e := range entries {
 		entry := new(DirListEntry)
@@ -191,14 +195,22 @@ func HandlePath(Path string, rsp http.ResponseWriter, req *http.Request) *Respon
 		return response
 	}
 
+	wantDir := (len(strings.Split(Path, FILE_SEP)) < 3)
+
 	// Translate to the actual path
 	Path = TranslatePath(Path)
 
 	info, err := os.Stat(Path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			response.Rc = http.StatusNotFound
-			response.Msg = fmt.Sprintf("Path not found [%s] -> [%s]", req.RequestURI, Path)
+			if wantDir {
+				response.Rc = http.StatusOK
+				response.Data = ListDirContents(Path, true)
+				response.contentType = "application/json"
+			} else {
+				response.Rc = http.StatusNotFound
+				response.Msg = fmt.Sprintf("Path not found [%s] -> [%s]", req.RequestURI, Path)
+			}
 		} else if os.IsPermission(err) {
 			response.Rc = http.StatusForbidden
 			response.Msg = fmt.Sprintf("Access denied [%s] -> [%s]", req.RequestURI, Path)
@@ -210,7 +222,7 @@ func HandlePath(Path string, rsp http.ResponseWriter, req *http.Request) *Respon
 	}
 
 	if info.IsDir() {
-		response.Data = ListDirContents(Path)
+		response.Data = ListDirContents(Path, false)
 		response.contentType = "application/json"
 	} else if cmd == "download" {
 		response.fileData = ReadFile(Path)
@@ -237,8 +249,6 @@ func HandleRequest(rsp http.ResponseWriter, req *http.Request) {
 	path := strings.TrimPrefix(req.URL.Path, "/api/1")
 
 	path = SanitizePath(path)
-	path = strings.TrimPrefix(path, FILE_SEP)
-	path = strings.TrimSuffix(path, FILE_SEP)
 
 	// We don't care if the command is list or download - always produce the output
 	var data []byte
