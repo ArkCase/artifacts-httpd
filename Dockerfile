@@ -1,5 +1,5 @@
-ARG VER="1.1.0"
-ARG GO="1.24"
+ARG VER="1.2.0"
+ARG GO="1.26"
 ARG ARCH="amd64"
 ARG OS="linux"
 
