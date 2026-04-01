@@ -25,6 +25,8 @@ ENV GO111MODULE="on"
 ENV CGO_ENABLED="0"
 ENV GOOS="${OS}"
 ENV GOARCH="${ARCH}"
+ENV GOFIPS140="v1.0.0"
+
 RUN cd "${SRCPATH}" && \
     go mod edit -go "${GO}" && \
     go get -u && \
