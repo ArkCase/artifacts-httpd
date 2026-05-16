@@ -25,6 +25,7 @@ ENV GO111MODULE="on"
 ENV CGO_ENABLED="0"
 ENV GOOS="${OS}"
 ENV GOARCH="${ARCH}"
+
 RUN cd "${SRCPATH}" && \
     go mod edit -go "${GO}" && \
     go get -u && \
