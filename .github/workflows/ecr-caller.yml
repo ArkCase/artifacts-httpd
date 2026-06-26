@@ -1,10 +1,6 @@
 name: ecr-build
 on:
   workflow_dispatch: {}
-  push:
-    branches:
-      - main
-      - develop
 
 jobs:
   call-workflow-in-ecr-template:
